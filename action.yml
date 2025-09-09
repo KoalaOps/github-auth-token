@@ -1,0 +1,85 @@
+name: 'GitHub Auth Token'
+description: 'Gets GitHub token from PAT or GitHub App for cross-repo access'
+author: 'KoalaOps'
+
+branding:
+  icon: 'key'
+  color: 'purple'
+
+inputs:
+  github_pat:
+    description: 'GitHub Personal Access Token'
+    required: false
+  github_app_id:
+    description: 'GitHub App ID'
+    required: false
+  github_app_private_key:
+    description: 'GitHub App Private Key'
+    required: false
+  repository:
+    description: 'Repository to authenticate against (default: current repo)'
+    required: false
+    default: ${{ github.repository }}
+  fallback_token:
+    description: 'Token to use as fallback when no auth method is configured'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  token:
+    description: 'GitHub authentication token'
+    value: ${{ steps.token.outputs.token }}
+  token_type:
+    description: 'Type of token used (pat, app, or github_token)'
+    value: ${{ steps.token.outputs.type }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check auth method
+      id: check
+      shell: bash
+      run: |
+        # Priority: PAT > GitHub App > GITHUB_TOKEN
+        if [ -n "${{ inputs.github_pat }}" ]; then
+          echo "method=pat" >> $GITHUB_OUTPUT
+        elif [ -n "${{ inputs.github_app_id }}" ] && [ -n "${{ inputs.github_app_private_key }}" ]; then
+          echo "method=app" >> $GITHUB_OUTPUT
+        else
+          echo "method=github_token" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Generate GitHub App token
+      id: app_token
+      if: steps.check.outputs.method == 'app'
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.github_app_id }}
+        private-key: ${{ inputs.github_app_private_key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ inputs.repository != github.repository && format('["{0}"]', inputs.repository) || '' }}
+    
+    - name: Output token
+      id: token
+      shell: bash
+      run: |
+        METHOD="${{ steps.check.outputs.method }}"
+        
+        case "$METHOD" in
+          pat)
+            echo "🔑 Using GitHub Personal Access Token"
+            echo "::add-mask::${{ inputs.github_pat }}"
+            echo "token=${{ inputs.github_pat }}" >> $GITHUB_OUTPUT
+            echo "type=pat" >> $GITHUB_OUTPUT
+            ;;
+          app)
+            echo "🤖 Using GitHub App authentication"
+            echo "token=${{ steps.app_token.outputs.token }}" >> $GITHUB_OUTPUT
+            echo "type=app" >> $GITHUB_OUTPUT
+            ;;
+          *)
+            echo "🔑 Using fallback token"
+            echo "token=${{ inputs.fallback_token }}" >> $GITHUB_OUTPUT
+            echo "type=github_token" >> $GITHUB_OUTPUT
+            ;;
+        esac
